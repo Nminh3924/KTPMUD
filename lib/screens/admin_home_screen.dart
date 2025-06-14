@@ -11,6 +11,7 @@ import 'manage_users_screen.dart';
 import 'settings_screen.dart';
 import 'iot_screen.dart';
 import '../widgets/placeholder_content.dart';
+import '../screens/general_management_screen.dart';
 
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});
@@ -32,7 +33,7 @@ class AdminHomeScreen extends StatelessWidget {
       const AdminDashboardContent(),
       const ManageUsersScreen(),
       const PlaceholderContent(title: 'Sản lượng'),
-      const PlaceholderContent(title: 'Quản lý chung'),
+      const GeneralManagementScreen(),
       const PlaceholderContent(title: 'Quy trình'),
       const PlaceholderContent(title: 'Nhật ký canh tác'),
       const IOTScreen(),
@@ -214,6 +215,7 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
 
   Widget _buildWeatherCard() {
     Color startColor = Colors.blue.shade200, endColor = Colors.blue.shade400;
+
     if (weatherData != null) {
       final weatherCondition = weatherData!['weather'][0]['main'].toString().toLowerCase();
       if (weatherCondition.contains('rain')) {
@@ -221,31 +223,71 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
         endColor = Colors.grey.shade600;
       } else if (weatherCondition.contains('clear')) {
         startColor = Colors.yellow.shade300;
-        endColor = Colors.orange.shade300;
+        endColor = const Color.fromARGB(255, 255, 216, 157);
       } else if (weatherCondition.contains('cloud')) {
         startColor = Colors.grey.shade300;
         endColor = Colors.grey.shade500;
       }
     }
 
+    double luminance = (startColor.computeLuminance() + endColor.computeLuminance()) / 2;
+    final colorMap = {
+      'temp': luminance < 0.5 ? Colors.red[200]! : Colors.orange[600]!,
+      'location': luminance < 0.5 ? Colors.teal[200]! : Colors.teal[800]!,
+      'humidity': luminance < 0.5 ? Colors.green[200]! : Colors.green[800]!,
+      'wind': luminance < 0.5 ? Colors.blue[200]! : Colors.blue[800]!,
+      'cloud': luminance < 0.5 ? Colors.grey[300]! : Colors.grey[700]!,
+      'pressure': luminance < 0.5 ? Colors.purple[200]! : Colors.purple[800]!,
+      'visibility': luminance < 0.5 ? Colors.indigo[200]! : Colors.indigo[800]!,
+      'sunrise': luminance < 0.5 ? Colors.orange[200]! : Colors.orange[800]!,
+      'sunset': luminance < 0.5 ? Colors.deepPurple[200]! : Colors.deepPurple[800]!,
+    };
+
     String sunrise = 'N/A', sunset = 'N/A';
     if (weatherData != null) {
       final sunriseTimestamp = weatherData!['sys']['sunrise'] as int?;
       final sunsetTimestamp = weatherData!['sys']['sunset'] as int?;
       if (sunriseTimestamp != null && sunsetTimestamp != null) {
-        sunrise = DateFormat('HH:mm')
-            .format(DateTime.fromMillisecondsSinceEpoch(sunriseTimestamp * 1000).toLocal());
-        sunset = DateFormat('HH:mm')
-            .format(DateTime.fromMillisecondsSinceEpoch(sunsetTimestamp * 1000).toLocal());
+        sunrise = DateFormat('HH:mm').format(DateTime.fromMillisecondsSinceEpoch(sunriseTimestamp * 1000).toLocal());
+        sunset = DateFormat('HH:mm').format(DateTime.fromMillisecondsSinceEpoch(sunsetTimestamp * 1000).toLocal());
       }
     }
+
+    final weatherDetails = <Widget>[
+      if (weatherData != null) ...[
+        Text(
+          (weatherData!['weather'][0]['description'] as String).toUpperCase(),
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: colorMap['cloud']),
+        ),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.water_drop, colorMap['humidity']!, 'Độ ẩm: ${weatherData!['main']['humidity']}%',
+            textColor: colorMap['humidity']!),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.air, colorMap['wind']!, 'Gió: ${weatherData!['wind']['speed']} m/s',
+            textColor: colorMap['wind']!),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.cloud, colorMap['cloud']!, 'Mây: ${weatherData!['clouds']['all']}%',
+            textColor: colorMap['cloud']!),
+      ],
+      if (weatherData != null) ...[
+        _buildWeatherDetail(Icons.thermostat, colorMap['pressure']!, 'Áp suất: ${weatherData!['main']['pressure']} hPa',
+            textColor: colorMap['pressure']!),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.visibility, colorMap['visibility']!, 'Tầm nhìn: ${(weatherData!['visibility'] / 1000).toStringAsFixed(1)} km',
+            textColor: colorMap['visibility']!),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.wb_sunny, colorMap['sunrise']!, 'Mặt trời mọc: $sunrise',
+            textColor: colorMap['sunrise']!),
+        const SizedBox(height: 5),
+        _buildWeatherDetail(Icons.nights_stay, colorMap['sunset']!, 'Mặt trời lặn: $sunset',
+            textColor: colorMap['sunset']!),
+      ],
+    ];
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width - 40, // 40 là padding 2 bên (20 + 20)
-        ),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width - 40),
         child: IntrinsicWidth(
           child: Container(
             constraints: const BoxConstraints(maxHeight: 210),
@@ -273,15 +315,15 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
                 children: [
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    mainAxisSize: MainAxisSize.min, // Đảm bảo Row không mở rộng hết chiều ngang
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Text(
+                      Text(
                         'Tình hình thời tiết',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: Colors.black87),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500, color: Color(0xFF4A4A4A)),
                       ),
                       const SizedBox(width: 10),
                       IconButton(
-                        icon: const Icon(Icons.refresh, color: Colors.black54, size: 20),
+                        icon: Icon(Icons.refresh, color: Color(0xFF4A4A4A), size: 20),
                         onPressed: _fetchWeather,
                       ),
                     ],
@@ -291,7 +333,7 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
                     child: isLoadingWeather
                         ? const Center(child: CircularProgressIndicator(color: Colors.white))
                         : Row(
-                            mainAxisSize: MainAxisSize.min, // Đảm bảo Row không mở rộng hết chiều ngang
+                            mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Padding(
@@ -303,8 +345,9 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
                                       ? Image.network(
                                           'http://openweathermap.org/img/wn/${weatherData!['weather'][0]['icon']}@2x.png',
                                           fit: BoxFit.contain,
+                                          errorBuilder: (context, error, stackTrace) => Icon(Icons.cloud, size: 40, color: colorMap['location']!),
                                         )
-                                      : const Icon(Icons.cloud, size: 40, color: Colors.white70),
+                                      : Icon(Icons.cloud, size: 40, color: colorMap['location']!),
                                 ),
                               ),
                               const SizedBox(width: 20),
@@ -316,23 +359,21 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
                                     weatherData != null
                                         ? '${weatherData!['name']}, ${weatherData!['sys']['country']}'
                                         : 'Đang tải...',
-                                    style: const TextStyle(
-                                        fontSize: 18, fontWeight: FontWeight.w500, color: Colors.black54),
+                                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500, color: colorMap['location']!),
                                   ),
                                   const SizedBox(height: 5),
                                   Text(
                                     weatherData != null
                                         ? '${weatherData!['main']['temp'].toStringAsFixed(1)}°C'
                                         : 'N/A',
-                                    style: const TextStyle(
-                                        fontSize: 28, fontWeight: FontWeight.bold, color: Colors.deepOrange),
+                                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: colorMap['temp']!),
                                   ),
                                   const SizedBox(height: 5),
                                   Text(
                                     weatherData != null
                                         ? 'Cảm giác: ${weatherData!['main']['feels_like'].toStringAsFixed(1)}°C'
                                         : 'N/A',
-                                    style: const TextStyle(fontSize: 16, color: Colors.orangeAccent),
+                                    style: TextStyle(fontSize: 16, color: colorMap['temp']!),
                                   ),
                                 ],
                               ),
@@ -340,45 +381,13 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    weatherData != null
-                                        ? (weatherData!['weather'][0]['description'] as String).toUpperCase()
-                                        : 'Không có dữ liệu',
-                                    style: const TextStyle(
-                                        fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black54),
-                                  ),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(Icons.water_drop, Colors.teal,
-                                      'Độ ẩm: ${weatherData != null ? weatherData!['main']['humidity'] : 'N/A'}%'),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(Icons.air, Colors.greenAccent,
-                                      'Gió: ${weatherData != null ? weatherData!['wind']['speed'] : 'N/A'} m/s'),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(Icons.cloud, Colors.blueGrey,
-                                      'Mây: ${weatherData != null ? weatherData!['clouds']['all'] : 'N/A'}%'),
-                                ],
+                                children: weatherDetails.sublist(0, weatherDetails.length ~/ 2),
                               ),
                               const SizedBox(width: 20),
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  _buildWeatherDetail(
-                                      Icons.thermostat,
-                                      Colors.redAccent,
-                                      'Áp suất: ${weatherData != null ? weatherData!['main']['pressure'] : 'N/A'} hPa'),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(
-                                      Icons.visibility,
-                                      Colors.purpleAccent,
-                                      'Tầm nhìn: ${weatherData != null ? (weatherData!['visibility'] / 1000).toStringAsFixed(1) : 'N/A'} km'),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(Icons.wb_sunny, Colors.amber, 'Mặt trời mọc: $sunrise'),
-                                  const SizedBox(height: 5),
-                                  _buildWeatherDetail(
-                                      Icons.nights_stay, Colors.indigoAccent, 'Mặt trời lặn: $sunset'),
-                                ],
+                                children: weatherDetails.sublist(weatherDetails.length ~/ 2),
                               ),
                             ],
                           ),
@@ -392,13 +401,13 @@ class _AdminDashboardContentState extends State<AdminDashboardContent>
     );
   }
 
-  Widget _buildWeatherDetail(IconData icon, Color color, String text) {
+  Widget _buildWeatherDetail(IconData icon, Color iconColor, String text, {required Color textColor}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 16, color: color),
+        Icon(icon, color: iconColor, size: 16),
         const SizedBox(width: 5),
-        Text(text, style: TextStyle(fontSize: 16, color: color)),
+        Text(text, style: TextStyle(fontSize: 14, color: textColor)),
       ],
     );
   }

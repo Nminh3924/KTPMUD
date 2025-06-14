@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:intl/date_symbol_data_local.dart'; // Thêm import này
 import 'providers/auth_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/manage_users_screen.dart';
@@ -13,14 +12,6 @@ import 'screens/settings_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Khởi tạo locale cho intl (để sử dụng DateFormat với 'vi_VN')
-  try {
-    await initializeDateFormatting('vi_VN', null);
-    debugPrint('Locale vi_VN initialized successfully');
-  } catch (e) {
-    debugPrint('Error initializing locale vi_VN: $e');
-  }
 
   // Khởi tạo Supabase
   try {

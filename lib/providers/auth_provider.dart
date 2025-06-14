@@ -35,22 +35,20 @@ class AuthErrorMessages {
 }
 
 class AuthProvider extends ChangeNotifier {
+  // Thuộc tính trạng thái
   String? _userRole;
   String? _currentUserId;
   String? _currentAvatarUrl;
   String? _sessionToken;
   bool? _isAdmin;
   LoginFailureReason? _loginFailureReason;
+
+  // Khởi tạo Supabase và ScaffoldMessengerKey
   final SupabaseClient _supabase = Supabase.instance.client;
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
-  // GlobalKey để hiển thị SnackBar
-  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
-      GlobalKey<ScaffoldMessengerState>();
-
-  // Getter để truy cập ScaffoldMessengerKey
+  // Getter
   GlobalKey<ScaffoldMessengerState> get scaffoldMessengerKey => _scaffoldMessengerKey;
-
-  // Getter để truy cập các thuộc tính
   String? get userRole => _userRole;
   String? get currentUserId => _currentUserId;
   String? get currentAvatarUrl => _currentAvatarUrl;
@@ -59,10 +57,10 @@ class AuthProvider extends ChangeNotifier {
   bool get isLoggedIn => _currentUserId != null && _sessionToken != null;
 
   AuthProvider() {
-    // Không gọi _loadSavedSession() trong constructor nữa
+    // Không gọi _loadSavedSession() trong constructor, sẽ gọi trong initialize()
   }
 
-  /// Khởi tạo trạng thái của AuthProvider
+  // Khởi tạo trạng thái từ SharedPreferences
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     _currentUserId = prefs.getString('currentUserId');
@@ -77,11 +75,8 @@ class AuthProvider extends ChangeNotifier {
           _currentAvatarUrl = profile['avatar_url'] as String?;
           _isAdmin = profile['is_admin'] as bool? ?? (_userRole == 'admin');
           await prefs.setBool('isAdmin', _isAdmin!);
-        } else {
-          // Nếu không tải được profile, xóa session nếu không phải admin
-          if (_userRole != 'admin') {
-            await _clearSession(prefs);
-          }
+        } else if (_userRole != 'admin') {
+          await _clearSession(prefs);
         }
       } catch (e) {
         debugPrint('Error loading saved session: $e');
@@ -89,14 +84,13 @@ class AuthProvider extends ChangeNotifier {
       }
     } else {
       _sessionToken = const Uuid().v4();
-      debugPrint('No session loaded, created new sessionToken: $_sessionToken');
+      debugPrint('No session loaded, generated new sessionToken: $_sessionToken');
     }
-    debugPrint(
-        'Loaded session: currentUserId = $_currentUserId, userRole = $_userRole, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
+    debugPrint('Initialized session: currentUserId = $_currentUserId, userRole = $_userRole, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
     notifyListeners();
   }
 
-  /// Xóa session từ SharedPreferences
+  // Xóa session
   Future<void> _clearSession(SharedPreferences prefs) async {
     await prefs.remove('currentUserId');
     await prefs.remove('userRole');
@@ -107,65 +101,53 @@ class AuthProvider extends ChangeNotifier {
     _isAdmin = null;
     _sessionToken = null;
     debugPrint('Session cleared');
+    notifyListeners();
   }
 
-  /// Cập nhật header cho SupabaseClient
+  // Cập nhật header cho client Supabase
   void _updateClientHeaders(SupabaseClient client, String? userId, String? sessionToken, bool? isAdmin) {
-    final effectiveUserId = userId ?? 'unknown';
-    final effectiveSessionToken = sessionToken ?? 'unknown';
-    final effectiveIsAdmin = isAdmin ?? false;
+  final effectiveUserId = Supabase.instance.client.auth.currentUser?.id ?? userId ?? 'unknown';
+  final effectiveSessionToken = sessionToken ?? const Uuid().v4();
+  final effectiveIsAdmin = isAdmin ?? false;
 
-    final headers = {
-      'app.current_user_id': effectiveUserId,
-      'app.session_token': effectiveSessionToken,
-      'app.is_admin': effectiveIsAdmin.toString(),
-    };
-    client.rest.headers.addAll(headers);
+  client.rest.headers['app.current_user_id'] = effectiveUserId;
+  client.rest.headers['app.session_token'] = effectiveSessionToken;
+  client.rest.headers['app.is_admin'] = effectiveIsAdmin.toString();
 
-    debugPrint(
-        'Header set: app.current_user_id = $effectiveUserId, app.session_token = $effectiveSessionToken, app.is_admin = $effectiveIsAdmin');
-    debugPrint('All headers: ${client.rest.headers}');
-  }
+  debugPrint('Header set: app.current_user_id = $effectiveUserId, app.session_token = $effectiveSessionToken, app.is_admin = $effectiveIsAdmin');
+}
 
-  /// Hash mật khẩu bằng BCrypt
+  // Xử lý mật khẩu
   String _hashPassword(String password) {
     _validatePassword(password);
     return BCrypt.hashpw(password, BCrypt.gensalt());
   }
 
-  /// Kiểm tra mật khẩu với hash
   bool _checkPassword(String password, String hashedPassword) {
     return BCrypt.checkpw(password, hashedPassword);
   }
 
-  /// Kiểm tra độ mạnh của mật khẩu
   void _validatePassword(String password) {
     if (password.length < 8) {
       throw AuthException(AuthErrorMessages.passwordTooWeak);
     }
-    final hasUppercase = password.contains(RegExp(r'[A-Z]'));
-    final hasLowercase = password.contains(RegExp(r'[a-z]'));
-    final hasNumber = password.contains(RegExp(r'[0-9]'));
-    if (!(hasUppercase && hasLowercase && hasNumber)) {
+    if (!RegExp(r'^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])').hasMatch(password)) {
       throw AuthException(AuthErrorMessages.passwordTooWeak);
     }
   }
 
-  /// Kiểm tra quyền admin
+  // Kiểm tra quyền admin
   Future<bool> _checkAdminRights() async {
     if (_currentUserId == null || _currentUserId!.isEmpty) {
       debugPrint('Admin check failed: currentUserId is null or empty');
       throw AuthException('Không thể kiểm tra quyền admin: ID người dùng trống.');
     }
     try {
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-      final response = await client
+      final response = await _supabase
           .from('users')
           .select('role, is_admin')
           .eq('id', _currentUserId!)
           .maybeSingle();
-      debugPrint('Admin check response: $response');
       if (response == null) {
         debugPrint('Admin check failed: User $_currentUserId not found');
         throw AuthException('Không tìm thấy người dùng $_currentUserId.');
@@ -179,23 +161,19 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  /// Đăng nhập người dùng
+  // Đăng nhập
   Future<bool> login(String id, String password) async {
     try {
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, null, _sessionToken, null);
-      debugPrint('Attempting to login with id: $id');
-      final response = await client.from('users').select().eq('id', id).maybeSingle();
-      debugPrint('Login response: $response');
+      _updateClientHeaders(_supabase, null, _sessionToken, null);
+      debugPrint('Attempting login with id: $id');
+      final response = await _supabase.from('users').select().eq('id', id).maybeSingle();
       if (response == null) {
         _loginFailureReason = LoginFailureReason.notFound;
-        debugPrint('Login failed: User $id not found');
         throw AuthException(AuthErrorMessages.userNotFound);
       }
       final storedPassword = response['password'] as String;
       if (!_checkPassword(password, storedPassword)) {
         _loginFailureReason = LoginFailureReason.wrongPassword;
-        debugPrint('Login failed: Wrong password for user $id');
         throw AuthException(AuthErrorMessages.wrongPassword);
       }
       _userRole = response['role'] as String;
@@ -205,87 +183,54 @@ class AuthProvider extends ChangeNotifier {
       _sessionToken = const Uuid().v4();
       _loginFailureReason = null;
 
-      debugPrint(
-          'Login successful: role = $_userRole, currentUserId = $_currentUserId, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
-
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('currentUserId', _currentUserId!);
       await prefs.setString('userRole', _userRole!);
       await prefs.setString('sessionToken', _sessionToken!);
       await prefs.setBool('isAdmin', _isAdmin!);
-      debugPrint('Session saved');
+      debugPrint('Login successful: role = $_userRole, currentUserId = $_currentUserId, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
 
       notifyListeners();
       return true;
     } catch (e) {
       _loginFailureReason = LoginFailureReason.error;
-      debugPrint('Login error: $e');
       throw AuthException('Đăng nhập thất bại: $e');
     }
   }
 
-  /// Đổi mật khẩu người dùng
+  // Đổi mật khẩu
   Future<bool> changePassword(String userId, String newPassword, {String? oldPassword}) async {
     try {
       if (_currentUserId == null || _currentUserId!.isEmpty) {
-        debugPrint('Change password failed: currentUserId is null or empty');
         throw AuthException('Không thể đổi mật khẩu: ID người dùng trống.');
       }
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-      debugPrint(
-          'Client created with app.current_user_id = $_currentUserId, app.session_token = $_sessionToken, app.is_admin = $_isAdmin, headers: ${client.rest.headers}');
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
 
-      // Kiểm tra người dùng tồn tại
-      final check = await client.from('users').select().eq('id', userId).maybeSingle();
-      debugPrint('Change password check response: $check');
+      final check = await _supabase.from('users').select().eq('id', userId).maybeSingle();
       if (check == null) {
-        debugPrint('Change password failed: User $userId not found or access denied');
         throw AuthException('Người dùng $userId không tồn tại hoặc không có quyền truy cập.');
       }
-      final user = check;
-      debugPrint('User data before update: $user');
 
-      debugPrint(
-          'Attempting to change password for userId: $userId, currentUserId: $_currentUserId, userRole: $_userRole, isAdmin: $_isAdmin');
-
-      // Kiểm tra quyền và mật khẩu cũ
       if (_currentUserId == userId) {
         if (oldPassword == null) {
-          debugPrint('Change password failed: oldPassword is null for user $userId');
           throw AuthException(AuthErrorMessages.oldPasswordRequired);
         }
-        final storedPassword = user['password'] as String;
-        debugPrint('Old password entered: $oldPassword');
-        debugPrint('Stored password hash from database: $storedPassword');
+        final storedPassword = check['password'] as String;
         if (!_checkPassword(oldPassword, storedPassword)) {
-          debugPrint('Change password failed: Incorrect old password for user $userId. BCrypt check failed.');
           throw AuthException('Mật khẩu cũ không đúng.');
         }
-        debugPrint('Old password verified successfully for user $userId');
-      } else if (_isAdmin == true && _currentUserId != userId) {
-        debugPrint('Admin authorized to change password for $userId');
-      } else {
-        debugPrint('Change password failed: Unauthorized for user $_currentUserId to change $userId');
+      } else if (_isAdmin != true) {
         throw AuthException(AuthErrorMessages.unauthorized);
       }
 
-      // Tạo hash mật khẩu mới
       final newPasswordHash = _hashPassword(newPassword);
-      debugPrint('New password hash: $newPasswordHash');
-
-      // Gọi RPC để đổi mật khẩu
-      debugPrint('Calling RPC change_user_password for user $userId');
-      await client.rpc('change_user_password', params: {
+      await _supabase.rpc('change_user_password', params: {
         'p_user_id': userId,
         'p_new_password_hash': newPasswordHash,
         'p_current_user_id': _currentUserId,
         'p_is_admin': _isAdmin,
       });
 
-      debugPrint('Password changed successfully for user $userId via RPC');
-
-      // Xóa session nếu người dùng đổi mật khẩu của chính họ
       if (_currentUserId == userId) {
         final prefs = await SharedPreferences.getInstance();
         await _clearSession(prefs);
@@ -294,18 +239,16 @@ class AuthProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('Change password error: $e');
       if (e.toString().contains('No rows affected')) {
         throw AuthException('Không thể đổi mật khẩu: Không có thay đổi nào được thực hiện.');
       } else if (e.toString().contains('Unauthorized')) {
         throw AuthException('Không thể đổi mật khẩu: Không có quyền truy cập.');
-      } else {
-        throw AuthException('Không thể đổi mật khẩu: $e');
       }
+      throw AuthException('Không thể đổi mật khẩu: $e');
     }
   }
 
-  /// Tạo người dùng mới (chỉ admin mới có quyền)
+  // Tạo người dùng
   Future<bool> createUser(
     String newId,
     String password,
@@ -317,19 +260,12 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     try {
       if (!(await _checkAdminRights())) {
-        debugPrint('Create user failed: Only admin can create users');
         throw AuthException(AuthErrorMessages.onlyAdminCanCreate);
       }
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
 
-      // Tạo hash mật khẩu
       final passwordHash = _hashPassword(password);
-      debugPrint('Password hash for new user $newId: $passwordHash');
-
-      // Gọi RPC để tạo người dùng
-      debugPrint('Calling RPC create_user for user $newId');
-      await client.rpc('create_user', params: {
+      await _supabase.rpc('create_user', params: {
         'p_new_id': newId,
         'p_password_hash': passwordHash,
         'p_role': role,
@@ -341,234 +277,295 @@ class AuthProvider extends ChangeNotifier {
         'p_is_admin': _isAdmin,
       });
 
-      debugPrint('User $newId created successfully via RPC');
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('Create user error: $e');
       if (e.toString().contains('Only one admin account is allowed')) {
         throw AuthException(AuthErrorMessages.onlyOneAdmin);
       } else if (e.toString().contains('User') && e.toString().contains('already exists')) {
         throw AuthException(AuthErrorMessages.userAlreadyExists);
-      } else if (e.toString().contains('Only admin can create users')) {
-        throw AuthException(AuthErrorMessages.onlyAdminCanCreate);
       }
       throw AuthException('Không thể tạo tài khoản: $e');
     }
   }
 
-  /// Tải avatar lên và cập nhật URL avatar (ghi đè ảnh cũ)
+  // Tải ảnh đại diện
   Future<String?> uploadAvatar(String userId, String filePath) async {
-  try {
-    if (_currentUserId == null || _currentUserId!.isEmpty) {
-      debugPrint('Upload avatar failed: currentUserId is null or empty');
-      throw AuthException('Không thể tải ảnh: ID người dùng trống.');
-    }
-    if (_currentUserId != userId) {
-      debugPrint('Upload avatar failed: User $_currentUserId is not authorized to update $userId');
-      throw AuthException('Bạn chỉ có thể cập nhật ảnh đại diện của chính mình.');
-    }
-
-    final client = Supabase.instance.client;
-    _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-
-    // Kiểm tra người dùng tồn tại
-    final check = await client.from('users').select().eq('id', userId).maybeSingle();
-    debugPrint('Upload avatar check response: $check');
-    if (check == null) {
-      debugPrint('Upload avatar failed: User $userId not found');
-      throw AuthException('Người dùng $userId không tồn tại.');
-    }
-
-    // Xóa file cũ nếu tồn tại
-    final oldAvatarUrl = check['avatar_url'] as String?;
-    if (oldAvatarUrl != null && oldAvatarUrl.isNotEmpty) {
-      try {
-        final oldFileName = path.basename(oldAvatarUrl.split('?')[0]);
-        final deleteResponse = await _supabase.storage.from('avatars').remove([oldFileName]);
-        debugPrint('Delete old avatar response: $deleteResponse');
-        debugPrint('Deleted old avatar: $oldFileName');
-      } catch (e) {
-        debugPrint('Error deleting old avatar: $e');
-        // Tiếp tục tải file mới ngay cả khi xóa file cũ thất bại
+    try {
+      if (_currentUserId == null || _currentUserId!.isEmpty) {
+        throw AuthException('Không thể tải ảnh: ID người dùng trống.');
       }
+      if (_currentUserId != userId) {
+        throw AuthException('Bạn chỉ có thể cập nhật ảnh đại diện của chính mình.');
+      }
+
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+
+      final check = await _supabase.from('users').select().eq('id', userId).maybeSingle();
+      if (check == null) {
+        throw AuthException('Người dùng $userId không tồn tại.');
+      }
+
+      final oldAvatarUrl = check['avatar_url'] as String?;
+      if (oldAvatarUrl != null && oldAvatarUrl.isNotEmpty) {
+        try {
+          final oldFileName = path.basename(oldAvatarUrl.split('?')[0]);
+          await _supabase.storage.from('avatars').remove([oldFileName]);
+        } catch (e) {
+          // Bỏ qua lỗi nếu xóa thất bại
+        }
+      }
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
+      final fileName = 'avatar-$userId-$timestamp.jpg';
+      final file = File(filePath);
+      final fileBytes = await file.readAsBytes();
+
+      await _supabase.storage.from('avatars').uploadBinary(
+            fileName,
+            fileBytes,
+            fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false),
+          );
+
+      final url = _supabase.storage.from('avatars').getPublicUrl(fileName);
+      await _supabase.rpc('update_user_avatar', params: {
+        'p_user_id': userId,
+        'p_avatar_url': url,
+        'p_current_user_id': _currentUserId,
+      });
+
+      _currentAvatarUrl = url;
+      notifyListeners();
+      return url;
+    } catch (e) {
+      throw AuthException('Không thể tải ảnh đại diện: $e');
     }
-
-    // Tạo tên file duy nhất với timestamp
-    final timestamp = DateTime.now().millisecondsSinceEpoch.toString();
-    final fileName = 'avatar-$userId-$timestamp.jpg';
-
-    // Tải file mới lên
-    final file = File(filePath);
-    final fileBytes = await file.readAsBytes();
-    debugPrint('Uploading avatar: $fileName, size: ${fileBytes.length} bytes');
-
-    final uploadResponse = await _supabase.storage.from('avatars').uploadBinary(
-          fileName,
-          fileBytes,
-          fileOptions: const FileOptions(
-            contentType: 'image/jpeg',
-            upsert: false, // Không cần upsert vì tên file là duy nhất
-          ),
-        );
-    debugPrint('Upload response: $uploadResponse');
-
-    // Lấy URL công khai
-    final url = _supabase.storage.from('avatars').getPublicUrl(fileName);
-    debugPrint('Avatar uploaded successfully, URL: $url');
-
-    // Gọi RPC để cập nhật avatar_url
-    debugPrint('Calling RPC update_user_avatar for user $userId');
-    await client.rpc('update_user_avatar', params: {
-      'p_user_id': userId,
-      'p_avatar_url': url,
-      'p_current_user_id': _currentUserId,
-    });
-
-    _currentAvatarUrl = url;
-    debugPrint('Avatar updated in database for user $userId: $url');
-    notifyListeners();
-    return url;
-  } catch (e) {
-    debugPrint('Upload avatar error: $e');
-    throw AuthException('Không thể tải ảnh đại diện: $e');
   }
-}
 
-  /// Thông báo cập nhật avatar
   void notifyAvatarUpdated(String url) {
     _currentAvatarUrl = url;
-    debugPrint('Avatar updated: $url');
     notifyListeners();
   }
 
-  /// Xóa người dùng (chỉ admin mới có quyền)
+  // Xóa người dùng
   Future<bool> deleteUser(String userId) async {
     try {
       if (!(await _checkAdminRights())) {
-        debugPrint('Delete user failed: Only admin can delete users');
         throw AuthException(AuthErrorMessages.onlyAdminCanDelete);
       }
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
 
-      // Gọi RPC để xóa người dùng
-      debugPrint('Calling RPC delete_user for user $userId');
-      final result = await client.rpc('delete_user', params: {
+      final result = await _supabase.rpc('delete_user', params: {
         'p_user_id': userId,
         'p_current_user_id': _currentUserId,
         'p_is_admin': _isAdmin,
       });
 
-      debugPrint('RPC delete_user result: $result');
       if (result == null || result == 0) {
         throw AuthException('Không thể xóa tài khoản: Không có thay đổi nào được thực hiện.');
       }
 
       if (_currentUserId == userId) await logout();
-      debugPrint('User $userId deleted successfully via RPC, rows affected: $result');
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('Delete user error: $e');
       if (e.toString().contains('Cannot delete the admin account')) {
         throw AuthException(AuthErrorMessages.cannotDeleteAdmin);
       } else if (e.toString().contains('User') && e.toString().contains('not found')) {
         throw AuthException('Không tìm thấy tài khoản $userId.');
-      } else if (e.toString().contains('Only admin can delete users')) {
-        throw AuthException(AuthErrorMessages.onlyAdminCanDelete);
       }
       throw AuthException('Không thể xóa tài khoản: $e');
     }
   }
 
-  /// Lấy danh sách người dùng (chỉ admin mới có quyền)
+  // Lấy danh sách người dùng
   Future<List<Map<String, dynamic>>> getUsers() async {
     try {
       if (_currentUserId == null || _currentUserId!.isEmpty) {
-        debugPrint('Fetch users failed: currentUserId is null or empty');
         throw AuthException('Không thể lấy danh sách: ID người dùng trống.');
       }
       if (!(await _checkAdminRights())) {
-        debugPrint('Fetch users failed: Only admin can fetch users');
         throw AuthException(AuthErrorMessages.onlyAdminCanFetch);
       }
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-      debugPrint(
-          'Fetching users with currentUserId: $_currentUserId, sessionToken: $_sessionToken, isAdmin: $_isAdmin');
-      final response = await client.from('users').select().neq('id', 'admin');
-      debugPrint('Loaded users: $response');
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.from('users').select().neq('id', 'admin');
       return (response as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
     } catch (e) {
-      debugPrint('Fetch users error: $e');
       throw AuthException('Không thể lấy danh sách người dùng: $e');
     }
   }
 
-  /// Lấy thông tin profile của người dùng hiện tại
+  // Lấy thông tin người dùng hiện tại
   Future<Map<String, dynamic>?> getCurrentUserProfile() async {
     try {
       if (_currentUserId == null || _currentUserId!.isEmpty) {
-        debugPrint('Fetch profile failed: currentUserId is null or empty');
         throw AuthException('Không thể lấy thông tin: ID người dùng trống.');
       }
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-      debugPrint(
-          'Fetching profile for currentUserId: $_currentUserId, sessionToken: $_sessionToken, isAdmin: $_isAdmin, headers: ${client.rest.headers}');
-      final response = await client.from('users').select().eq('id', _currentUserId!).maybeSingle();
-      debugPrint('Profile fetch response: $response');
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.from('users').select().eq('id', _currentUserId!).maybeSingle();
       if (response == null) {
-        debugPrint('Fetch profile failed: User $_currentUserId not found or RLS restricted');
         throw AuthException('Người dùng $_currentUserId không tồn tại hoặc không có quyền truy cập.');
       }
       _currentAvatarUrl = response['avatar_url'] as String?;
       _isAdmin = response['is_admin'] as bool? ?? (_userRole == 'admin');
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isAdmin', _isAdmin!);
-      debugPrint('Fetched profile: $response, isAdmin updated to $_isAdmin');
       return response;
     } catch (e) {
-      debugPrint('Fetch profile error: $e');
       throw AuthException('Không thể lấy thông tin cá nhân: $e');
     }
   }
 
-  /// Đăng xuất người dùng
+  // Đăng xuất
   Future<void> logout() async {
     try {
-      _userRole = null;
-      _currentUserId = null;
-      _currentAvatarUrl = null;
-      _isAdmin = null;
-      debugPrint('Logout successful');
-
       final prefs = await SharedPreferences.getInstance();
       await _clearSession(prefs);
-
-      // Tạo sessionToken mới sau khi đăng xuất
       _sessionToken = const Uuid().v4();
-      debugPrint('Created new sessionToken after logout: $_sessionToken');
-
       notifyListeners();
     } catch (e) {
-      debugPrint('Logout error: $e');
       throw AuthException('Không thể đăng xuất: $e');
     }
   }
 
-  /// Kiểm tra header (dùng để debug)
+  // Lấy log header
   Future<List<Map<String, dynamic>>> logHeaders() async {
     try {
-      final client = Supabase.instance.client;
-      _updateClientHeaders(client, _currentUserId, _sessionToken, _isAdmin);
-      final response = await client.rpc('log_headers').select();
-      debugPrint('Log headers response: $response');
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.rpc('log_headers').select();
       return (response as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
     } catch (e) {
-      debugPrint('Log headers error: $e');
       throw AuthException('Không thể kiểm tra header: $e');
+    }
+  }
+
+  // Lấy danh sách vật phẩm trong kho
+  Future<List<Map<String, dynamic>>> getInventoryItems() async {
+  try {
+    if (_currentUserId == null || _currentUserId!.isEmpty) {
+      debugPrint('Fetch inventory failed: currentUserId is null or empty');
+      throw AuthException('Không thể lấy danh sách: ID người dùng trống.');
+    }
+    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+    debugPrint('Calling get_inventory_items with p_current_user_id: $_currentUserId, p_is_admin: ${_isAdmin ?? false}');
+    final response = await _supabase.rpc('get_inventory_items', params: {
+      'p_current_user_id': _currentUserId,
+      'p_is_admin': _isAdmin ?? false,
+    });
+
+    if (response is! List) {
+      debugPrint('Unexpected response type: $response');
+      throw AuthException('Phản hồi từ Supabase không hợp lệ: $response');
+    }
+    
+    final items = (response as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+    debugPrint('Items from Supabase: $items');
+    return items;
+  } catch (e) {
+    debugPrint('Fetch inventory error: $e');
+    if (e is PostgrestException) {
+      debugPrint('Supabase exception: ${e.message}, details: ${e.details}');
+    }
+    throw AuthException('Không thể lấy danh sách vật phẩm: $e');
+  }
+}
+
+  // Thêm hoặc cập nhật vật phẩm trong kho
+  Future<bool> createInventoryItem({required String id, required String name, required String type, required double quantity, String? productCode}) async {
+    try {
+      if (id.isEmpty) {
+        debugPrint('Error: id is empty');
+        throw AuthException('ID không được để trống.');
+      }
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.rpc('create_or_update_inventory', params: {
+        'p_id': id.trim(),
+        'p_name': name.trim(),
+        'p_type': type.trim(),
+        'p_quantity': quantity,
+        'p_product_code': productCode?.trim(),
+        'p_current_user_id': _currentUserId,
+        'p_is_admin': _isAdmin ?? false,
+      });
+      if (response == null || (response is! String && response != true)) {
+        debugPrint('Invalid response from Supabase: $response');
+        throw AuthException('Lỗi khi thêm vật phẩm: Phản hồi không hợp lệ.');
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Create Error: $e');
+      throw AuthException('Không thể thêm vật phẩm: $e');
+    }
+  }
+
+  // Cập nhật vật phẩm trong kho
+  Future<bool> updateInventoryItem({required String id, required String name, required String type, required double quantity, String? productCode}) async {
+    try {
+      if (id.isEmpty) {
+        debugPrint('Error: id is empty');
+        throw AuthException('ID không được để trống.');
+      }
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.rpc('update_inventory_item', params: {
+        'p_id': id.trim(),
+        'p_name': name.trim(),
+        'p_type': type.trim(),
+        'p_quantity': quantity,
+        'p_product_code': productCode?.trim(),
+        'p_current_user_id': _currentUserId,
+        'p_is_admin': _isAdmin ?? false,
+      });
+      if (response == null || response !is String) {
+        debugPrint('Invalid response from Supabase: $response');
+        throw AuthException('Lỗi khi cập nhật vật phẩm: Phản hồi không hợp lệ.');
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Update Error: $e');
+      throw AuthException('Không thể cập nhật vật phẩm: $e');
+    }
+  }
+
+  // Xóa vật phẩm trong kho
+  Future<bool> deleteInventoryItem(String id) async {
+    try {
+      if (id.isEmpty) {
+        debugPrint('Error: id is empty');
+        throw AuthException('ID không được để trống.');
+      }
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase.rpc('delete_inventory_item', params: {
+        'p_id': id.trim(),
+        'p_current_user_id': _currentUserId,
+        'p_is_admin': _isAdmin ?? false,
+      });
+      if (response == null || response !is String) {
+        debugPrint('Invalid response from Supabase: $response');
+        throw AuthException('Lỗi khi xóa vật phẩm: Phản hồi không hợp lệ.');
+      }
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Delete Error: $e');
+      throw AuthException('Không thể xóa vật phẩm: $e');
+    }
+  }
+
+  // Kiểm tra xem vật phẩm có tồn tại
+  Future<bool> isInventoryItemExists(String id) async {
+    try {
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      final response = await _supabase
+          .from('inventory')
+          .select('id')
+          .eq('id', id.trim())
+          .maybeSingle();
+      return response != null;
+    } catch (e) {
+      debugPrint('Error checking inventory item existence: $e');
+      return false;
     }
   }
 }

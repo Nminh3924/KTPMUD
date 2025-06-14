@@ -321,7 +321,7 @@ class _SubtitleText extends StatelessWidget {
           'Quản lý trồng trọt',
           style: GoogleFonts.dancingScript(
             fontSize: 30,
-            color: Colors.white,
+            color: const Color.fromARGB(255, 65, 14, 10),
             fontWeight: FontWeight.w400,
           ),
         ),
