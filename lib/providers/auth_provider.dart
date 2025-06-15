@@ -36,8 +36,8 @@ class AuthErrorMessages {
 
 class AuthProvider extends ChangeNotifier {
   // Thuộc tính trạng thái
+  String? _currentUserId; // Sử dụng ID từ bảng users
   String? _userRole;
-  String? _currentUserId;
   String? _currentAvatarUrl;
   String? _sessionToken;
   bool? _isAdmin;
@@ -54,68 +54,113 @@ class AuthProvider extends ChangeNotifier {
   String? get currentAvatarUrl => _currentAvatarUrl;
   bool? get isAdmin => _isAdmin;
   LoginFailureReason? get loginFailureReason => _loginFailureReason;
-  bool get isLoggedIn => _currentUserId != null && _sessionToken != null;
+  bool get isLoggedIn => _currentUserId != null && _currentUserId!.isNotEmpty;
 
   AuthProvider() {
-    // Không gọi _loadSavedSession() trong constructor, sẽ gọi trong initialize()
+    // Không gọi initialize() trong constructor
   }
 
-  // Khởi tạo trạng thái từ SharedPreferences
+  // Khởi tạo trạng thái từ Supabase và SharedPreferences
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // Khôi phục từ SharedPreferences
     _currentUserId = prefs.getString('currentUserId');
-    _userRole = prefs.getString('userRole');
     _sessionToken = prefs.getString('sessionToken');
     _isAdmin = prefs.getBool('isAdmin');
+    _userRole = prefs.getString('userRole');
 
-    if (_currentUserId != null && _sessionToken != null) {
+    if (_currentUserId != null) {
       try {
         final profile = await getCurrentUserProfile();
         if (profile != null) {
           _currentAvatarUrl = profile['avatar_url'] as String?;
           _isAdmin = profile['is_admin'] as bool? ?? (_userRole == 'admin');
-          await prefs.setBool('isAdmin', _isAdmin!);
-        } else if (_userRole != 'admin') {
+          _userRole = _isAdmin == true ? 'admin' : 'user';
+          await _saveSessionToPrefs(prefs);
+          debugPrint('Restored session from prefs: currentUserId = $_currentUserId, isAdmin = $_isAdmin, userRole = $_userRole');
+        } else {
           await _clearSession(prefs);
         }
       } catch (e) {
-        debugPrint('Error loading saved session: $e');
+        debugPrint('Error restoring session: $e');
         await _clearSession(prefs);
       }
     } else {
       _sessionToken = const Uuid().v4();
-      debugPrint('No session loaded, generated new sessionToken: $_sessionToken');
+      debugPrint('No session found, generated new sessionToken: $_sessionToken');
     }
-    debugPrint('Initialized session: currentUserId = $_currentUserId, userRole = $_userRole, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
     notifyListeners();
+  }
+
+  // Làm mới session nếu cần
+  Future<void> _refreshSession(SharedPreferences prefs) async {
+    if (_currentUserId != null) {
+      try {
+        final profile = await getCurrentUserProfile();
+        if (profile != null) {
+          _currentAvatarUrl = profile['avatar_url'] as String?;
+          _isAdmin = profile['is_admin'] as bool? ?? false;
+          _userRole = _isAdmin == true ? 'admin' : 'user';
+          _sessionToken = const Uuid().v4();
+          await _saveSessionToPrefs(prefs);
+          debugPrint('Refreshed session: currentUserId = $_currentUserId, isAdmin = $_isAdmin, userRole = $_userRole');
+        } else {
+          await _clearSession(prefs);
+        }
+      } catch (e) {
+        debugPrint('Error refreshing session: $e');
+        await _clearSession(prefs);
+      }
+    }
+  }
+
+  // Thử khôi phục từ profile nếu token không hợp lệ
+  Future<Map<String, dynamic>?> _tryRecoverFromProfile(SharedPreferences prefs) async {
+    if (_currentUserId != null) {
+      try {
+        final response = await _supabase.from('users').select().eq('id', _currentUserId!).maybeSingle();
+        if (response != null) {
+          return response;
+        }
+      } catch (e) {
+        debugPrint('Error recovering from profile: $e');
+      }
+    }
+    return null;
+  }
+
+  // Lưu session vào SharedPreferences
+  Future<void> _saveSessionToPrefs(SharedPreferences prefs) async {
+    await prefs.setString('currentUserId', _currentUserId ?? '');
+    await prefs.setString('userRole', _userRole ?? '');
+    await prefs.setString('sessionToken', _sessionToken ?? '');
+    await prefs.setBool('isAdmin', _isAdmin ?? false);
   }
 
   // Xóa session
   Future<void> _clearSession(SharedPreferences prefs) async {
-    await prefs.remove('currentUserId');
-    await prefs.remove('userRole');
-    await prefs.remove('sessionToken');
-    await prefs.remove('isAdmin');
+    await prefs.clear();
     _currentUserId = null;
     _userRole = null;
     _isAdmin = null;
-    _sessionToken = null;
+    _sessionToken = const Uuid().v4();
     debugPrint('Session cleared');
     notifyListeners();
   }
 
   // Cập nhật header cho client Supabase
   void _updateClientHeaders(SupabaseClient client, String? userId, String? sessionToken, bool? isAdmin) {
-  final effectiveUserId = Supabase.instance.client.auth.currentUser?.id ?? userId ?? 'unknown';
-  final effectiveSessionToken = sessionToken ?? const Uuid().v4();
-  final effectiveIsAdmin = isAdmin ?? false;
+    final effectiveUserId = userId ?? 'unknown';
+    final effectiveSessionToken = sessionToken ?? const Uuid().v4();
+    final effectiveIsAdmin = isAdmin ?? false;
 
-  client.rest.headers['app.current_user_id'] = effectiveUserId;
-  client.rest.headers['app.session_token'] = effectiveSessionToken;
-  client.rest.headers['app.is_admin'] = effectiveIsAdmin.toString();
+    client.rest.headers['app.current_user_id'] = effectiveUserId;
+    client.rest.headers['app.session_token'] = effectiveSessionToken;
+    client.rest.headers['app.is_admin'] = effectiveIsAdmin.toString();
 
-  debugPrint('Header set: app.current_user_id = $effectiveUserId, app.session_token = $effectiveSessionToken, app.is_admin = $effectiveIsAdmin');
-}
+    debugPrint('Header set: app.current_user_id = $effectiveUserId, app.session_token = $effectiveSessionToken, app.is_admin = $effectiveIsAdmin');
+  }
 
   // Xử lý mật khẩu
   String _hashPassword(String password) {
@@ -136,10 +181,25 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  // Lấy vai trò từ Supabase
+  Future<bool> _fetchUserRoleFromSupabase(String userId) async {
+    try {
+      final response = await _supabase
+          .from('users')
+          .select('is_admin')
+          .eq('id', userId)
+          .single();
+      return response['is_admin'] as bool? ?? false;
+    } catch (e) {
+      debugPrint('Error fetching user role: $e');
+      return false;
+    }
+  }
+
   // Kiểm tra quyền admin
   Future<bool> _checkAdminRights() async {
-    if (_currentUserId == null || _currentUserId!.isEmpty) {
-      debugPrint('Admin check failed: currentUserId is null or empty');
+    if (_currentUserId == null) {
+      debugPrint('Admin check failed: currentUserId is null');
       throw AuthException('Không thể kiểm tra quyền admin: ID người dùng trống.');
     }
     try {
@@ -176,19 +236,16 @@ class AuthProvider extends ChangeNotifier {
         _loginFailureReason = LoginFailureReason.wrongPassword;
         throw AuthException(AuthErrorMessages.wrongPassword);
       }
-      _userRole = response['role'] as String;
+      _userRole = response['role'] as String?;
       _currentUserId = id;
       _currentAvatarUrl = response['avatar_url'] as String?;
       _isAdmin = response['is_admin'] as bool? ?? (_userRole == 'admin');
-      _sessionToken = const Uuid().v4();
+      _sessionToken = const Uuid().v4(); // Tạo token mới vì không dùng Supabase Auth
       _loginFailureReason = null;
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('currentUserId', _currentUserId!);
-      await prefs.setString('userRole', _userRole!);
-      await prefs.setString('sessionToken', _sessionToken!);
-      await prefs.setBool('isAdmin', _isAdmin!);
-      debugPrint('Login successful: role = $_userRole, currentUserId = $_currentUserId, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
+      await _saveSessionToPrefs(prefs);
+      debugPrint('Login successful: currentUserId = $_currentUserId, userRole = $_userRole, isAdmin = $_isAdmin, avatarUrl = $_currentAvatarUrl, sessionToken = $_sessionToken');
 
       notifyListeners();
       return true;
@@ -201,7 +258,7 @@ class AuthProvider extends ChangeNotifier {
   // Đổi mật khẩu
   Future<bool> changePassword(String userId, String newPassword, {String? oldPassword}) async {
     try {
-      if (_currentUserId == null || _currentUserId!.isEmpty) {
+      if (_currentUserId == null) {
         throw AuthException('Không thể đổi mật khẩu: ID người dùng trống.');
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
@@ -259,7 +316,10 @@ class AuthProvider extends ChangeNotifier {
     required String hometown,
   }) async {
     try {
-      if (!(await _checkAdminRights())) {
+      if (_currentUserId == null) {
+        throw AuthException('Không thể tạo tài khoản: Không có người dùng đã đăng nhập.');
+      }
+      if (!await _checkAdminRights()) {
         throw AuthException(AuthErrorMessages.onlyAdminCanCreate);
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
@@ -292,7 +352,7 @@ class AuthProvider extends ChangeNotifier {
   // Tải ảnh đại diện
   Future<String?> uploadAvatar(String userId, String filePath) async {
     try {
-      if (_currentUserId == null || _currentUserId!.isEmpty) {
+      if (_currentUserId == null) {
         throw AuthException('Không thể tải ảnh: ID người dùng trống.');
       }
       if (_currentUserId != userId) {
@@ -350,7 +410,10 @@ class AuthProvider extends ChangeNotifier {
   // Xóa người dùng
   Future<bool> deleteUser(String userId) async {
     try {
-      if (!(await _checkAdminRights())) {
+      if (_currentUserId == null) {
+        throw AuthException('Không thể xóa tài khoản: Không có người dùng đã đăng nhập.');
+      }
+      if (!await _checkAdminRights()) {
         throw AuthException(AuthErrorMessages.onlyAdminCanDelete);
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
@@ -381,10 +444,10 @@ class AuthProvider extends ChangeNotifier {
   // Lấy danh sách người dùng
   Future<List<Map<String, dynamic>>> getUsers() async {
     try {
-      if (_currentUserId == null || _currentUserId!.isEmpty) {
+      if (_currentUserId == null) {
         throw AuthException('Không thể lấy danh sách: ID người dùng trống.');
       }
-      if (!(await _checkAdminRights())) {
+      if (!await _checkAdminRights()) {
         throw AuthException(AuthErrorMessages.onlyAdminCanFetch);
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
@@ -398,7 +461,7 @@ class AuthProvider extends ChangeNotifier {
   // Lấy thông tin người dùng hiện tại
   Future<Map<String, dynamic>?> getCurrentUserProfile() async {
     try {
-      if (_currentUserId == null || _currentUserId!.isEmpty) {
+      if (_currentUserId == null) {
         throw AuthException('Không thể lấy thông tin: ID người dùng trống.');
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
@@ -409,7 +472,7 @@ class AuthProvider extends ChangeNotifier {
       _currentAvatarUrl = response['avatar_url'] as String?;
       _isAdmin = response['is_admin'] as bool? ?? (_userRole == 'admin');
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('isAdmin', _isAdmin!);
+      await _saveSessionToPrefs(prefs);
       return response;
     } catch (e) {
       throw AuthException('Không thể lấy thông tin cá nhân: $e');
@@ -421,7 +484,7 @@ class AuthProvider extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await _clearSession(prefs);
-      _sessionToken = const Uuid().v4();
+      debugPrint('Logged out successfully');
       notifyListeners();
     } catch (e) {
       throw AuthException('Không thể đăng xuất: $e');
@@ -441,34 +504,34 @@ class AuthProvider extends ChangeNotifier {
 
   // Lấy danh sách vật phẩm trong kho
   Future<List<Map<String, dynamic>>> getInventoryItems() async {
-  try {
-    if (_currentUserId == null || _currentUserId!.isEmpty) {
-      debugPrint('Fetch inventory failed: currentUserId is null or empty');
-      throw AuthException('Không thể lấy danh sách: ID người dùng trống.');
-    }
-    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
-    debugPrint('Calling get_inventory_items with p_current_user_id: $_currentUserId, p_is_admin: ${_isAdmin ?? false}');
-    final response = await _supabase.rpc('get_inventory_items', params: {
-      'p_current_user_id': _currentUserId,
-      'p_is_admin': _isAdmin ?? false,
-    });
+    try {
+      if (_currentUserId == null) {
+        debugPrint('Fetch inventory failed: currentUserId is null');
+        throw AuthException('Không thể lấy danh sách: ID người dùng trống.');
+      }
+      _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      debugPrint('Calling get_inventory_items with p_current_user_id: $_currentUserId, p_is_admin: ${_isAdmin ?? false}');
+      final response = await _supabase.rpc('get_inventory_items', params: {
+        'p_current_user_id': _currentUserId,
+        'p_is_admin': _isAdmin ?? false,
+      });
 
-    if (response is! List) {
-      debugPrint('Unexpected response type: $response');
-      throw AuthException('Phản hồi từ Supabase không hợp lệ: $response');
+      if (response is! List) {
+        debugPrint('Unexpected response type: $response');
+        throw AuthException('Phản hồi từ Supabase không hợp lệ: $response');
+      }
+      
+      final items = (response as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+      debugPrint('Items from Supabase: $items');
+      return items;
+    } catch (e) {
+      debugPrint('Fetch inventory error: $e');
+      if (e is PostgrestException) {
+        debugPrint('Supabase exception: ${e.message}, details: ${e.details}');
+      }
+      throw AuthException('Không thể lấy danh sách vật phẩm: $e');
     }
-    
-    final items = (response as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
-    debugPrint('Items from Supabase: $items');
-    return items;
-  } catch (e) {
-    debugPrint('Fetch inventory error: $e');
-    if (e is PostgrestException) {
-      debugPrint('Supabase exception: ${e.message}, details: ${e.details}');
-    }
-    throw AuthException('Không thể lấy danh sách vật phẩm: $e');
   }
-}
 
   // Thêm hoặc cập nhật vật phẩm trong kho
   Future<bool> createInventoryItem({required String id, required String name, required String type, required double quantity, String? productCode}) async {
@@ -476,6 +539,9 @@ class AuthProvider extends ChangeNotifier {
       if (id.isEmpty) {
         debugPrint('Error: id is empty');
         throw AuthException('ID không được để trống.');
+      }
+      if (_currentUserId == null) {
+        throw AuthException('Không thể thêm vật phẩm: Không có người dùng đã đăng nhập.');
       }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
       final response = await _supabase.rpc('create_or_update_inventory', params: {
@@ -506,24 +572,32 @@ class AuthProvider extends ChangeNotifier {
         debugPrint('Error: id is empty');
         throw AuthException('ID không được để trống.');
       }
+      if (_currentUserId == null) {
+        debugPrint('Update failed: No authenticated user');
+        throw AuthException('Không thể cập nhật: Không có người dùng đã đăng nhập.');
+      }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      debugPrint('Calling update_inventory_item with p_current_user_id: $_currentUserId, p_id: $id, p_name: $name, p_type: $type, p_quantity: $quantity, p_product_code: $productCode');
       final response = await _supabase.rpc('update_inventory_item', params: {
+        'p_current_user_id': _currentUserId,
         'p_id': id.trim(),
         'p_name': name.trim(),
         'p_type': type.trim(),
         'p_quantity': quantity,
         'p_product_code': productCode?.trim(),
-        'p_current_user_id': _currentUserId,
-        'p_is_admin': _isAdmin ?? false,
       });
-      if (response == null || response !is String) {
+      if (response == null || response is! String) {
         debugPrint('Invalid response from Supabase: $response');
         throw AuthException('Lỗi khi cập nhật vật phẩm: Phản hồi không hợp lệ.');
       }
+      debugPrint('Update response: $response');
       notifyListeners();
       return true;
     } catch (e) {
       debugPrint('Update Error: $e');
+      if (e is PostgrestException) {
+        debugPrint('Supabase exception: ${e.message}, details: ${e.details}');
+      }
       throw AuthException('Không thể cập nhật vật phẩm: $e');
     }
   }
@@ -535,20 +609,29 @@ class AuthProvider extends ChangeNotifier {
         debugPrint('Error: id is empty');
         throw AuthException('ID không được để trống.');
       }
+      if (_currentUserId == null) {
+        debugPrint('Delete failed: No authenticated user');
+        throw AuthException('Không thể xóa: Không có người dùng đã đăng nhập.');
+      }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+      debugPrint('Calling delete_inventory_item with p_current_user_id: $_currentUserId, p_id: $id');
       final response = await _supabase.rpc('delete_inventory_item', params: {
-        'p_id': id.trim(),
         'p_current_user_id': _currentUserId,
-        'p_is_admin': _isAdmin ?? false,
+        'p_id': id.trim(),
       });
-      if (response == null || response !is String) {
+
+      if (response == null || response is! String) {
         debugPrint('Invalid response from Supabase: $response');
         throw AuthException('Lỗi khi xóa vật phẩm: Phản hồi không hợp lệ.');
       }
+      debugPrint('Delete response: $response');
       notifyListeners();
       return true;
     } catch (e) {
       debugPrint('Delete Error: $e');
+      if (e is PostgrestException) {
+        debugPrint('Supabase exception: ${e.message}, details: ${e.details}');
+      }
       throw AuthException('Không thể xóa vật phẩm: $e');
     }
   }
@@ -556,6 +639,10 @@ class AuthProvider extends ChangeNotifier {
   // Kiểm tra xem vật phẩm có tồn tại
   Future<bool> isInventoryItemExists(String id) async {
     try {
+      if (_currentUserId == null) {
+        debugPrint('Check existence failed: No authenticated user');
+        return false;
+      }
       _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
       final response = await _supabase
           .from('inventory')
@@ -568,4 +655,80 @@ class AuthProvider extends ChangeNotifier {
       return false;
     }
   }
+  // Trong class AuthProvider, thêm các phương thức sau:
+
+Future<List<Map<String, dynamic>>> getLands() async {
+  try {
+    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+    final response = await _supabase.from('lands').select('id, name, export_date, crop_id, fertilizer_id, pesticide_id, fertilizer_quantity, pesticide_quantity, crop_quantity');
+    return (response as List).cast<Map<String, dynamic>>();
+  } catch (e) {
+    throw AuthException('Không thể tải danh sách lô đất: $e');
+  }
+}
+
+Future<bool> updateLand({required int landId, String? exportDate, String? cropId}) async {
+  try {
+    if (_currentUserId == null) {
+      throw AuthException('Không thể cập nhật lô đất: ID người dùng trống.');
+    }
+    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+    final response = await _supabase.rpc('update_land', params: {
+      'p_land_id': landId,
+      'p_export_date': exportDate,
+      'p_crop_id': cropId,
+      'p_current_user_id': _currentUserId,
+    });
+    if (response == null || response is! String) {
+      throw AuthException('Cập nhật lô đất thất bại: Phản hồi không hợp lệ.');
+    }
+    notifyListeners();
+    return true;
+  } catch (e) {
+    throw AuthException('Không thể cập nhật lô đất: $e');
+  }
+}
+Future<bool> exportItem({required int landId, required String itemId, required double quantity}) async {
+  try {
+    if (_currentUserId == null) {
+      throw AuthException('Không thể xuất hàng: ID người dùng trống.');
+    }
+    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+    final response = await _supabase.rpc('export_item', params: {
+      'p_land_id': landId,
+      'p_item_id': itemId,
+      'p_quantity': quantity,
+      'p_current_user_id': _currentUserId,
+    });
+    if (response == null || response is! String) {
+      throw AuthException('Xuất hàng thất bại: Phản hồi không hợp lệ.');
+    }
+    debugPrint('Export success: $response'); // Log thành công
+    notifyListeners();
+    return true;
+  } catch (e) {
+    debugPrint('Export error: $e'); // Log lỗi chi tiết
+    throw AuthException('Không thể xuất hàng: $e');
+  }
+}
+Future<bool> harvestCrop({required int landId}) async {
+  try {
+    if (_currentUserId == null) {
+      throw AuthException('Không thể thu hoạch: ID người dùng trống.');
+    }
+    _updateClientHeaders(_supabase, _currentUserId, _sessionToken, _isAdmin);
+    final response = await _supabase.rpc('harvest_crop', params: {
+      'p_land_id': landId,
+      'p_current_user_id': _currentUserId,
+    });
+    if (response == null || response is! String) {
+      throw AuthException('Thu hoạch thất bại: Phản hồi không hợp lệ.');
+    }
+    notifyListeners();
+    return true;
+  } catch (e) {
+    throw AuthException('Không thể thu hoạch: $e');
+  }
+}
+
 }

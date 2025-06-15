@@ -28,13 +28,12 @@ Future<void> main() async {
   // Khởi tạo Hive
   try {
     await Hive.initFlutter();
-    await Hive.openBox('sensor_data'); // Mở box để lưu trữ dữ liệu
+    await Hive.openBox('sensor_data');
     debugPrint('Hive initialized successfully');
   } catch (e) {
     debugPrint('Error initializing Hive: $e');
   }
 
-  // Chỉ gọi runApp một lần
   runApp(
     MultiProvider(
       providers: [
@@ -114,20 +113,19 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 
   Future<void> _checkAuthState() async {
-    final authProvider = context.read<AuthProvider>();
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
 
     // Đảm bảo splash screen hiển thị ít nhất 1 giây
     const minimumSplashDuration = Duration(seconds: 1);
     final splashTimer = Future.delayed(minimumSplashDuration);
 
     try {
-      // Khởi tạo AuthProvider
-      await authProvider.initialize(); // Đảm bảo AuthProvider đã sẵn sàng
-      await splashTimer; // Đợi ít nhất 1 giây để hiển thị splash screen
+      await authProvider.initialize();
+      await splashTimer;
 
       if (authProvider.isLoggedIn && authProvider.userRole != null) {
         final role = authProvider.userRole!;
-        debugPrint('Auto-navigating to $role home screen');
+        debugPrint('Auto-navigating to $role home screen: isLoggedIn = ${authProvider.isLoggedIn}, currentUserId = ${authProvider.currentUserId}');
         switch (role) {
           case 'admin':
             Navigator.pushReplacementNamed(context, '/admin-home');
@@ -142,7 +140,7 @@ class _SplashScreenState extends State<SplashScreen> {
             Navigator.pushReplacementNamed(context, '/login');
         }
       } else {
-        debugPrint('No session found, navigating to /login');
+        debugPrint('No session found or invalid role, navigating to /login: isLoggedIn = ${authProvider.isLoggedIn}, currentUserId = ${authProvider.currentUserId}');
         Navigator.pushReplacementNamed(context, '/login');
       }
     } catch (e) {
@@ -155,7 +153,7 @@ class _SplashScreenState extends State<SplashScreen> {
             duration: const Duration(seconds: 3),
           ),
         );
-        await Future.delayed(const Duration(seconds: 3)); // Đợi để người dùng thấy thông báo
+        await Future.delayed(const Duration(seconds: 3));
         Navigator.pushReplacementNamed(context, '/login');
       }
     }

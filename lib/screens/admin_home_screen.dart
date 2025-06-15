@@ -12,6 +12,8 @@ import 'settings_screen.dart';
 import 'iot_screen.dart';
 import '../widgets/placeholder_content.dart';
 import '../screens/general_management_screen.dart';
+import '../screens/Land_Management_Screen.dart';
+
 
 class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});
@@ -21,7 +23,7 @@ class AdminHomeScreen extends StatelessWidget {
     const menuItems = [
       {'icon': Icons.dashboard, 'label': 'Tổng quan'},
       {'icon': Icons.person, 'label': 'Nhân sự'},
-      {'icon': Icons.trending_up, 'label': 'Sản lượng'},
+      {'icon': Icons.trending_up, 'label': 'Quản lý'},
       {'icon': Icons.account_balance_wallet, 'label': 'Quản lý chung'},
       {'icon': Icons.work, 'label': 'Quy trình'},
       {'icon': Icons.book, 'label': 'Nhật ký canh tác'},
@@ -32,7 +34,7 @@ class AdminHomeScreen extends StatelessWidget {
     final pages = [
       const AdminDashboardContent(),
       const ManageUsersScreen(),
-      const PlaceholderContent(title: 'Sản lượng'),
+      const LandManagementScreen(),
       const GeneralManagementScreen(),
       const PlaceholderContent(title: 'Quy trình'),
       const PlaceholderContent(title: 'Nhật ký canh tác'),

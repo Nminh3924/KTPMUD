@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import 'land_management_screen.dart'; // Thêm import cho LandManagementScreen
 
 class GeneralManagementScreen extends StatefulWidget {
   const GeneralManagementScreen({super.key});
@@ -67,6 +68,13 @@ class _GeneralManagementScreenState extends State<GeneralManagementScreen>
           ),
         ),
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => const LandManagementScreen()));
+        },
+        backgroundColor: const Color.fromARGB(255, 2, 46, 50),
+        child: const Icon(Icons.add),
+      ),
     );
   }
 }
@@ -104,31 +112,31 @@ class _InventoryStatsTabState extends State<InventoryStatsTab> with AutomaticKee
   }
 
   Future<void> _fetchItems() async {
-  if (!mounted) return;
-  setState(() => _isLoading = true);
-  try {
-    final authProvider = context.read<AuthProvider>();
-    final items = await authProvider.getInventoryItems();
-    debugPrint('Items fetched in UI: $items'); // Kiểm tra dữ liệu
-    if (mounted) {
-      setState(() {
-        _items = items ?? [];
-        _filteredItems = List.from(_items);
-        _isLoading = false;
-      });
-    }
-  } catch (e) {
-    debugPrint('Fetch error details: $e'); // Log lỗi nếu có
-    if (mounted) {
-      _showSnackBar('Lỗi khi tải dữ liệu kho: $e', Colors.red);
-      setState(() {
-        _items = [];
-        _filteredItems = [];
-        _isLoading = false;
-      });
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final authProvider = context.read<AuthProvider>();
+      final items = await authProvider.getInventoryItems();
+      debugPrint('Items fetched in UI: $items'); // Kiểm tra dữ liệu
+      if (mounted) {
+        setState(() {
+          _items = items ?? [];
+          _filteredItems = List.from(_items);
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('Fetch error details: $e'); // Log lỗi nếu có
+      if (mounted) {
+        _showSnackBar('Lỗi khi tải dữ liệu kho: $e', Colors.red);
+        setState(() {
+          _items = [];
+          _filteredItems = [];
+          _isLoading = false;
+        });
+      }
     }
   }
-}
 
   void _showSnackBar(String message, Color color) {
     if (mounted) {
@@ -248,12 +256,11 @@ class _InventoryStatsTabState extends State<InventoryStatsTab> with AutomaticKee
                           width: totalWidth * columnRatios[0],
                           child: Center(
                             child: Text(
-                              'STT',
+                              'ID',
                               style: TextStyle(fontWeight: FontWeight.bold, fontSize: fontSize * 0.9),
                             ),
                           ),
                         ),
-                        numeric: true,
                       ),
                       DataColumn(
                         label: Container(
@@ -290,14 +297,16 @@ class _InventoryStatsTabState extends State<InventoryStatsTab> with AutomaticKee
                         numeric: true,
                       ),
                     ],
-                    rows: _filteredItems.asMap().entries.map((entry) {
-                      final index = entry.key + 1;
-                      final item = entry.value;
+                    rows: _filteredItems.map((item) {
                       final typeLabel = item['type'] == 'crop'
                           ? 'Cây trồng'
                           : item['type'] == 'fertilizer'
                               ? 'Phân bón'
-                              : 'Thuốc trừ sâu';
+                              : item['type'] == 'pesticide'
+                                  ? 'Thuốc trừ sâu'
+                                  : item['type'] == 'thành phẩm'
+                                      ? 'Thành phẩm'
+                                      : 'Không xác định';
                       return DataRow(
                         cells: [
                           DataCell(
@@ -305,7 +314,7 @@ class _InventoryStatsTabState extends State<InventoryStatsTab> with AutomaticKee
                               width: totalWidth * columnRatios[0],
                               child: Center(
                                 child: Text(
-                                  '$index',
+                                  item['id']?.toString() ?? 'N/A',
                                   style: TextStyle(fontSize: fontSize * 0.8),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -341,7 +350,7 @@ class _InventoryStatsTabState extends State<InventoryStatsTab> with AutomaticKee
                               width: totalWidth * columnRatios[3],
                               child: Center(
                                 child: Text(
-                                  '${item['quantity']?.toString() ?? '0'} ${item['type'] == 'crop' ? 'cây' : 'kg/lít'}',
+                                  '${item['quantity']?.toString() ?? '0'} ${item['type'] == 'crop' || item['type'] == 'thành phẩm' ? 'cây' : 'kg/lít'}',
                                   style: TextStyle(fontSize: fontSize * 0.8),
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -787,6 +796,8 @@ class _AddItemTabState extends State<AddItemTab> with AutomaticKeepAliveClientMi
   }
 }
 
+// ... (phần mã khác giữ nguyên)
+
 class ExportItemTab extends StatefulWidget {
   const ExportItemTab({super.key});
 
@@ -795,13 +806,283 @@ class ExportItemTab extends StatefulWidget {
 }
 
 class _ExportItemTabState extends State<ExportItemTab> {
+  final _idController = TextEditingController();
+  final _quantityController = TextEditingController();
+  String _selectedType = '';
+  bool _isTypeSelected = false;
+  bool _isLoading = false;
+  List<Map<String, dynamic>> _items = [];
+  List<Map<String, dynamic>> _lands = [];
+  String? _selectedItemId;
+  int? _selectedLandId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadData();
+    });
+    _idController.addListener(() {
+      final currentValue = _idController.text;
+      final prefix = _getPrefix(_selectedType);
+      if (currentValue.length < prefix.length || !currentValue.startsWith(prefix)) {
+        final newValue = prefix + (currentValue.length > prefix.length ? currentValue.substring(prefix.length) : '');
+        _idController.value = _idController.value.copyWith(
+          text: newValue,
+          selection: TextSelection.collapsed(offset: newValue.length),
+        );
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _idController.dispose();
+    _quantityController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final authProvider = context.read<AuthProvider>();
+      final items = await authProvider.getInventoryItems();
+      final lands = await authProvider.getLands();
+      if (mounted) {
+        setState(() {
+          _items = items
+              ?.where((item) => item['type'] != 'crop' || !_isCropInUse(item['id'].toString()))
+              .toList() ??
+              [];
+          _lands = lands ?? [];
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar('Lỗi khi tải dữ liệu: $e', Colors.red);
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  bool _isCropInUse(String cropId) {
+    return _lands.any((land) => land['crop_id'] == cropId);
+  }
+
+  void _showSnackBar(String message, Color color) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: color,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _handleExportItem() async {
+  if (!mounted) return;
+  if (!_isTypeSelected || _selectedItemId == null || _selectedLandId == null) {
+    _showSnackBar('Vui lòng chọn loại, vật phẩm và lô đất để xuất!', Colors.orange);
+    return;
+  }
+
+  final quantity = double.tryParse(_quantityController.text.trim()) ?? 0;
+
+  if (quantity <= 0) {
+    _showSnackBar('Vui lòng nhập số lượng hợp lệ (> 0)!', Colors.orange);
+    return;
+  }
+
+  // Kiểm tra số lượng tồn kho
+  final item = _items.firstWhere((item) => item['id'].toString() == _selectedItemId, orElse: () => {});
+  final availableQuantity = item['quantity']?.toDouble() ?? 0;
+  if (quantity > availableQuantity) {
+    _showSnackBar('Số lượng xuất ($quantity) vượt quá tồn kho ($availableQuantity)!', Colors.red);
+    return;
+  }
+
+  setState(() => _isLoading = true);
+  try {
+    final authProvider = context.read<AuthProvider>();
+
+    // Gọi exportItem với itemId
+    final success = await authProvider.exportItem(
+      landId: _selectedLandId!,
+      itemId: _selectedItemId!, // Sử dụng _selectedItemId
+      quantity: quantity,
+    );
+    if (mounted) {
+      if (success) {
+        _showSnackBar('Xuất hàng thành công!', Colors.green);
+        _resetFields();
+        await _loadData();
+      } else {
+        _showSnackBar('Xuất hàng thất bại! Vui lòng kiểm tra dữ liệu.', Colors.red);
+      }
+    }
+  } catch (e) {
+    debugPrint('Export error: $e');
+    if (mounted) _showSnackBar('Lỗi khi xuất hàng: $e', Colors.red);
+  } finally {
+    if (mounted) setState(() => _isLoading = false);
+  }
+}
+
+  void _resetFields() {
+    _idController.clear();
+    _quantityController.clear();
+    _selectedType = '';
+    _isTypeSelected = false;
+    _selectedItemId = null;
+    _selectedLandId = null;
+  }
+
+  String _getPrefix(String type) {
+    switch (type) {
+      case 'crop':
+        return 'CT-';
+      case 'fertilizer':
+        return 'PB-';
+      case 'pesticide':
+        return 'TTS-';
+      default:
+        return '';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Text(
-        'Tính năng xuất hàng sẽ được phát triển trong tương lai.\nVui lòng kiểm tra lại sau!',
-        textAlign: TextAlign.center,
-        style: TextStyle(fontSize: 18, color: Color(0xFF4A4A4A)),
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+
+    final filteredItems = _items.where((item) => _selectedType.isEmpty || item['type'] == _selectedType).toList();
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Xuất hàng:',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF4A4A4A)),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _selectedType.isNotEmpty ? _selectedType : null,
+            hint: const Text('Chọn loại vật phẩm'),
+            decoration: const InputDecoration(
+              labelText: 'Loại vật phẩm',
+              border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+              errorBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.red),
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            onChanged: (value) {
+              if (value != null) {
+                setState(() {
+                  _selectedType = value;
+                  _isTypeSelected = true;
+                  _idController.text = _getPrefix(value);
+                  _selectedItemId = null;
+                });
+              }
+            },
+            items: const [
+              DropdownMenuItem(value: 'crop', child: Text('Cây trồng')),
+              DropdownMenuItem(value: 'fertilizer', child: Text('Phân bón')),
+              DropdownMenuItem(value: 'pesticide', child: Text('Thuốc trừ sâu')),
+            ],
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<String>(
+            value: _selectedItemId,
+            hint: const Text('Chọn vật phẩm'),
+            decoration: const InputDecoration(
+              labelText: 'Vật phẩm',
+              border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+              errorBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.red),
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            onChanged: (value) {
+              if (value != null) {
+                setState(() {
+                  _selectedItemId = value;
+                  final item = filteredItems.firstWhere((item) => item['id'].toString() == value);
+                  _idController.text = item['id'].toString();
+                  _quantityController.text = ''; // Xóa giá trị số lượng để nhập lại
+                });
+              }
+            },
+            items: filteredItems.isEmpty
+                ? [const DropdownMenuItem(child: Text('Không có vật phẩm nào'))]
+                : filteredItems.map<DropdownMenuItem<String>>((item) {
+                    return DropdownMenuItem<String>(
+                      value: item['id'].toString(),
+                      child: Text('${item['name'] ?? 'Không có tên'} (Số lượng: ${item['quantity'] ?? 0})'),
+                    );
+                  }).toList(),
+          ),
+          const SizedBox(height: 16),
+          DropdownButtonFormField<int>(
+            value: _selectedLandId,
+            hint: const Text('Chọn lô đất'),
+            decoration: const InputDecoration(
+              labelText: 'Lô đất',
+              border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+              errorBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.red),
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            onChanged: (value) {
+              if (value != null) {
+                setState(() {
+                  _selectedLandId = value;
+                });
+              }
+            },
+            items: _lands.map<DropdownMenuItem<int>>((land) {
+              return DropdownMenuItem<int>(
+                value: land['id'],
+                child: Text('${land['name'] ?? 'Lô ${land['id']}'}'),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _quantityController,
+            enabled: _isTypeSelected && _selectedItemId != null && _selectedLandId != null,
+            decoration: const InputDecoration(
+              labelText: 'Số lượng',
+              border: OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+              errorBorder: OutlineInputBorder(
+                borderSide: BorderSide(color: Colors.red),
+                borderRadius: BorderRadius.all(Radius.circular(8)),
+              ),
+            ),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: _isTypeSelected && _selectedItemId != null && _selectedLandId != null
+                ? _handleExportItem
+                : null,
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 50),
+              backgroundColor: const Color.fromARGB(255, 2, 46, 50),
+              foregroundColor: Colors.white,
+              shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(8))),
+              disabledBackgroundColor: Colors.grey,
+            ),
+            child: const Text('Xuất hàng', style: TextStyle(fontSize: 16)),
+          ),
+        ],
       ),
     );
   }
