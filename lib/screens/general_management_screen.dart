@@ -68,13 +68,6 @@ class _GeneralManagementScreenState extends State<GeneralManagementScreen>
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          Navigator.push(context, MaterialPageRoute(builder: (context) => const LandManagementScreen()));
-        },
-        backgroundColor: const Color.fromARGB(255, 2, 46, 50),
-        child: const Icon(Icons.add),
-      ),
     );
   }
 }

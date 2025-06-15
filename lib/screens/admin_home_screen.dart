@@ -23,8 +23,8 @@ class AdminHomeScreen extends StatelessWidget {
     const menuItems = [
       {'icon': Icons.dashboard, 'label': 'Tổng quan'},
       {'icon': Icons.person, 'label': 'Nhân sự'},
-      {'icon': Icons.trending_up, 'label': 'Quản lý'},
-      {'icon': Icons.account_balance_wallet, 'label': 'Quản lý chung'},
+      {'icon': Icons.map, 'label': 'Quản lý lô đất'},
+      {'icon': Icons.inventory, 'label': 'Quản lý kho hàng'},
       {'icon': Icons.work, 'label': 'Quy trình'},
       {'icon': Icons.book, 'label': 'Nhật ký canh tác'},
       {'icon': Icons.wifi, 'label': 'IOT'},
